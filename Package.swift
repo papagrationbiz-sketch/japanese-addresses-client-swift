@@ -13,7 +13,7 @@ let package = Package(
   targets: [
     .target(
       name: "JapaneseAddressNormalizer",
-      resources: [.copy("Resources")]
+      resources: [.process("Resources")]
     ),
     .testTarget(
       name: "JapaneseAddressNormalizerTests",

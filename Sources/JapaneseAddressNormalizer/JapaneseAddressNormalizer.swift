@@ -283,8 +283,7 @@ public final class JapaneseAddressNormalizer: @unchecked Sendable {
         guard
           let resourceURL = Bundle.module.url(
             forResource: "normalize-japanese-addresses-3.1.3",
-            withExtension: "cjs",
-            subdirectory: "Resources"
+            withExtension: "cjs"
           ),
           let source = try? String(contentsOf: resourceURL, encoding: .utf8),
           context.evaluateScript(source) != nil
