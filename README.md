@@ -2,32 +2,56 @@
 
 SwiftPM package that wraps the existing `@geolonia/normalize-japanese-addresses` 3.1.3 UMD bundle for iOS 15+ and macOS 12+.
 
-The address normalization algorithm is not reimplemented in Swift. JavaScriptCore runs the upstream bundle, while an application-provided `AddressDataSource` supplies JSON and byte-range responses. This package has no built-in URLSession, network client, credentials, provider-specific UI, or persistent cache.
+The address normalization algorithm is not reimplemented in Swift. JavaScriptCore runs the upstream bundle, while an application-provided `AddressDataSource` supplies JSON and byte-range responses. The package includes optional URLSession transport and disk cache layers, but no credentials or provider-specific UI.
 
-## M0 scope
+## Scope
 
 - `JapaneseAddressNormalizer` and Sendable value types for normalized addresses and points.
 - Serial JavaScriptCore access safe for concurrent async calls.
 - A fetch bridge that turns the bundle's URL and `Range` requests into `AddressDataSource` calls.
 - Configurable base API URL.
 - Synthetic fixture tests for level 0, level 3, and a byte-range request.
+- `URLSessionAddressDataSource`, which checks HTTP status and exact `Content-Range` semantics.
+- `AddressManifestClient`, which accepts schema version 1 manifests and resolves an immutable relative version prefix to `origin/<prefix>/api/ja`.
+- `CachedAddressDataSource`, a regional/request cache that stores only URLs and ranges requested by the application. It does not prefetch or assume that unspecified manifest coverage means national coverage.
 
-The manifest, version switching, regional device cache, retention policy, and transport implementation belong in later layers. Applications can put their existing network or R2-aware implementation behind `AddressDataSource`.
+Applications may also provide their own `AddressDataSource` (for example, an R2-aware implementation).
+
+## Manifest schema
+
+The client accepts schema version 1 manifests with `schemaVersion`, `current`, `previous`, `updatedAt`, and a `versions` dictionary. Each version has a relative `prefix`, `publishedAt`, optional `sourceUpdatedAt`, and optional `coverage` (`national` or an explicit `municipalities` list). Omitted coverage is unknown; a region request then fails instead of falling back to a national dataset. Select a fixed version for reproducible requests.
 
 ## Usage
 
 ```swift
+import Foundation
 import JapaneseAddressNormalizer
 
+let transport = try URLSessionAddressDataSource()
+let manifest = try AddressManifestClient(
+    manifestURL: URL(string: "https://data.example.invalid/manifest.json")!,
+    dataSource: transport
+)
+let dataset = try await manifest.resolve()
+let cachedData = try CachedAddressDataSource(
+    upstream: transport,
+    directory: applicationCacheDirectory
+)
 let normalizer = try JapaneseAddressNormalizer(
-    baseAPIURL: URL(string: "https://data.example.invalid/api/ja")!,
-    dataSource: appDataSource
+    baseAPIURL: dataset.baseAPIURL,
+    dataSource: cachedData
 )
 let result = try await normalizer.normalize("ExamplePrefectureExampleCityExampleTown", level: 3)
 print(result.level, result.prefecture as Any)
 ```
 
-`Range<Int>` is half-open (`start..<end`). A provider should return the status and headers it received from its transport, including `Content-Range` for partial responses when applicable.
+Fetch the current manifest through the uncached transport, then cache requests under the resolved immutable version URL. This lets a later manifest switch select a new cache namespace while retained fixed-version entries remain available offline.
+
+`Range<Int>` is half-open (`start..<end`). Partial responses must be HTTP 206 with one exact `Content-Range: bytes start-end/total` matching the request and payload length. A provider should return the status and headers it received from its transport.
+
+## On-device cache and privacy
+
+`CachedAddressDataSource` uses a directory supplied by the application. Cache keys are SHA-256 digests of the complete URL plus exact half-open byte range, preventing dataset revisions and ranges from sharing responses. The default policy is a 100 MiB hard cap, eviction candidates after 60 days, data expiry after 90 days, and municipality-index retention for 180 days. The hard cap takes precedence. Only response bytes, request URL/range, headers, and cache timestamps are stored; address input, identity, credentials, and location are not persisted. Use an app-private directory and remove it when app data is deleted.
 
 ## Development
 
