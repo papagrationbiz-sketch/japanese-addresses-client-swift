@@ -257,12 +257,53 @@ public struct AddressManifestClient: Sendable {
   }
 
   private static func isCanonicalTimestamp(_ value: String) -> Bool {
-    guard value.utf8.count == 24 else { return false }
-    let pattern = #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$"#
-    guard value.range(of: pattern, options: .regularExpression) != nil else { return false }
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    guard let date = formatter.date(from: value) else { return false }
-    return formatter.string(from: date) == value
+    let characters = Array(value.utf8)
+    guard characters.count >= 20, characters.last == 0x5A else { return false }
+    let baseLength = 19
+    let base = Array(characters.prefix(baseLength))
+    guard base.count == baseLength,
+      base[4] == 0x2D, base[7] == 0x2D, base[10] == 0x54,
+      base[13] == 0x3A, base[16] == 0x3A,
+      base.enumerated().allSatisfy({ index, byte in
+        [4, 7, 10, 13, 16].contains(index) || (0x30...0x39).contains(byte)
+      })
+    else { return false }
+    let fraction: ArraySlice<UInt8>
+    if characters.count == 20 {
+      fraction = []
+    } else {
+      guard characters[19] == 0x2E else { return false }
+      fraction = characters[20..<characters.count - 1]
+      guard (1...9).contains(fraction.count), fraction.allSatisfy({ (0x30...0x39).contains($0) })
+      else { return false }
+    }
+    func number(_ start: Int, _ end: Int) -> Int? {
+      Int(String(decoding: characters[start..<end], as: UTF8.self))
+    }
+    guard let year = number(0, 4), let month = number(5, 7), let day = number(8, 10),
+      let hour = number(11, 13), let minute = number(14, 16), let second = number(17, 19),
+      year > 0, (1...12).contains(month), (1...31).contains(day), (0...23).contains(hour),
+      (0...59).contains(minute), (0...59).contains(second)
+    else { return false }
+    var nanosecond = 0
+    for byte in fraction { nanosecond = nanosecond * 10 + Int(byte - 0x30) }
+    for _ in fraction.count..<9 { nanosecond *= 10 }
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    var components = DateComponents()
+    components.calendar = calendar
+    components.timeZone = calendar.timeZone
+    components.year = year
+    components.month = month
+    components.day = day
+    components.hour = hour
+    components.minute = minute
+    components.second = second
+    components.nanosecond = nanosecond
+    guard let date = calendar.date(from: components) else { return false }
+    let actual = calendar.dateComponents(
+      [.year, .month, .day, .hour, .minute, .second, .nanosecond], from: date)
+    return actual.year == year && actual.month == month && actual.day == day
+      && actual.hour == hour && actual.minute == minute && actual.second == second
   }
 }

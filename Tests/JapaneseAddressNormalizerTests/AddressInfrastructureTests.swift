@@ -392,7 +392,7 @@ final class AddressInfrastructureTests: XCTestCase {
   func testManifestRejectsNonCanonicalMetadataAndOverlappingPrefixes() throws {
     let origin = URL(string: "https://data.example.invalid/manifest.json")!
     let nonCanonical = AddressManifest(
-      schemaVersion: 1, current: "a", updatedAt: "2026-01-01T00:00:00Z",
+      schemaVersion: 1, current: "a", updatedAt: "2026-01-01T00:00:00+00:00",
       versions: [
         "a": AddressManifestVersion(
           prefix: "versions/a", publishedAt: "2026-01-01T00:00:00.000Z")
@@ -410,6 +410,42 @@ final class AddressInfrastructureTests: XCTestCase {
           prefix: "versions/a/child", publishedAt: "2026-01-01T00:00:00.000Z"),
       ])
     XCTAssertThrowsError(try AddressManifestClient.resolve(manifest: overlapping, origin: origin))
+  }
+
+  func testManifestAcceptsUTCSecondAndFractionalPrecisionTimestamps() throws {
+    let origin = URL(string: "https://data.example.invalid/manifest.json")!
+    for timestamp in ["2026-09-01T16:07:33Z", "2026-09-01T16:07:33.123456789Z"] {
+      let manifest = AddressManifest(
+        schemaVersion: 1,
+        current: "v1",
+        updatedAt: timestamp,
+        versions: ["v1": AddressManifestVersion(prefix: "v1", publishedAt: timestamp)]
+      )
+      XCTAssertNoThrow(try AddressManifestClient.resolve(manifest: manifest, origin: origin))
+    }
+    let mixedShape = Data(
+      #"{"schemaVersion":1,"current":"v1","previous":null,"updatedAt":"2026-09-01T16:07:33.264Z","versions":{"v1":{"prefix":"v1","publishedAt":"2026-09-01T16:07:33Z","sourceUpdatedAt":"2024-12-25T04:57:48Z"}}}"#
+        .utf8)
+    let decoded = try JSONDecoder().decode(AddressManifest.self, from: mixedShape)
+    XCTAssertNoThrow(try AddressManifestClient.validate(decoded))
+  }
+
+  func testManifestRejectsInvalidDateTimezoneAndTrailingTimestamp() throws {
+    let origin = URL(string: "https://data.example.invalid/manifest.json")!
+    for timestamp in [
+      "2026-02-29T16:07:33Z", "2026-02-30T16:07:33Z", "2026-09-01T24:00:00Z",
+      "2026-09-01T16:07:60Z", "2026-09-01T16:07:33+00:00",
+      "2026-09-01T16:07:33", "2026-09-01T16:07:33.1234567890Z",
+      "2026-09-01T16:07:33.123Zgarbage",
+    ] {
+      let manifest = AddressManifest(
+        schemaVersion: 1,
+        current: "v1",
+        updatedAt: timestamp,
+        versions: ["v1": AddressManifestVersion(prefix: "v1", publishedAt: timestamp)]
+      )
+      XCTAssertThrowsError(try AddressManifestClient.resolve(manifest: manifest, origin: origin))
+    }
   }
 
   func testManifestVersionChangeRollbackAndExplicitRegionCoverage() throws {
