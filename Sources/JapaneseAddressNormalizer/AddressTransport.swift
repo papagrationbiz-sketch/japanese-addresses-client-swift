@@ -84,7 +84,12 @@ public final class URLSessionAddressDataSource: AddressDataSource, @unchecked Se
       return AddressDataResponse(data: data, statusCode: http.statusCode, headers: headers)
     } catch let error as AddressTransportError {
       throw error
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch let error as URLError where error.code == .cancelled {
+      throw CancellationError()
     } catch {
+      if Task.isCancelled { throw CancellationError() }
       throw AddressTransportError.requestFailed(String(describing: error))
     }
   }

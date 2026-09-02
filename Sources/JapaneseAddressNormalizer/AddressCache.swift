@@ -26,10 +26,12 @@ public struct AddressCachePolicy: Sendable, Equatable {
 public enum AddressCacheError: Error, Sendable, Equatable, LocalizedError {
   case invalidDirectory
   case invalidPolicy
+  case clearFailed(String)
   public var errorDescription: String? {
     switch self {
     case .invalidDirectory: return "The address cache directory is not available."
     case .invalidPolicy: return "The address cache policy is invalid."
+    case .clearFailed(let message): return "The address cache could not be cleared: \(message)"
     }
   }
 }
@@ -83,6 +85,7 @@ public actor CachedAddressDataSource: AddressDataSource {
   private let encoder = JSONEncoder()
   private let decoder = JSONDecoder()
   private var lastPrunedAt: Date?
+  private var generation: UInt64 = 0
 
   public init(
     upstream: any AddressDataSource, directory: URL, policy: AddressCachePolicy = .default,
@@ -105,18 +108,48 @@ public actor CachedAddressDataSource: AddressDataSource {
   }
 
   public func response(for url: URL, range: Range<Int>? = nil) async throws -> AddressDataResponse {
+    try Task.checkCancellation()
     let key = CacheKey(url: url, range: range)
     let now = Date()
+    let requestGeneration = generation
     if lastPrunedAt.map({ now.timeIntervalSince($0) >= 24 * 60 * 60 }) ?? true {
       prune(now: now)
     }
-    if let cached = read(key: key, now: now) { return cached }
+    if let cached = read(key: key, now: now) {
+      try Task.checkCancellation()
+      return cached
+    }
     let response = try await upstream.response(for: url, range: range)
+    try Task.checkCancellation()
     try ResponseValidator.validate(
       data: response.data, statusCode: response.statusCode, headers: response.headers,
       requestedRange: range)
-    store(response: response, key: key, now: now)
+    // `clear()` may have run while the upstream request was suspended. A
+    // pre-clear response is still returned to its caller, but must not repopulate
+    // the generation that the caller explicitly cleared.
+    if requestGeneration == generation {
+      store(response: response, key: key, now: now)
+    }
     return response
+  }
+
+  /// Removes only cache files created by this type and leaves the supplied
+  /// directory usable. Requests already in flight may complete, but their
+  /// pre-clear responses are not written back into the cleared generation.
+  public func clear() async throws {
+    generation &+= 1
+    lastPrunedAt = nil
+    do {
+      try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+      let urls = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+      for url in urls {
+        let stem = url.deletingPathExtension().lastPathComponent
+        guard isCacheStem(stem), ["json", "payload"].contains(url.pathExtension) else { continue }
+        try fileManager.removeItem(at: url)
+      }
+    } catch {
+      throw AddressCacheError.clearFailed(String(describing: error))
+    }
   }
 
   /// Removes expired entries and enforces the hard byte limit immediately.

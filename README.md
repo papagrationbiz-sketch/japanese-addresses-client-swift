@@ -45,7 +45,18 @@ let result = try await normalizer.normalize("ExamplePrefectureExampleCityExample
 print(result.level, result.prefecture as Any)
 ```
 
-Fetch the current manifest through the uncached transport, then cache requests under the resolved immutable version URL. This lets a later manifest switch select a new cache namespace while retained fixed-version entries remain available offline.
+Fetch the current manifest through the uncached transport, then cache requests under the resolved immutable version URL. This lets a later manifest switch select a new cache namespace while retained fixed-version entries remain available offline. `try await cachedData.clear()` is safe to call during requests: completed pre-clear responses are returned to their caller but cannot repopulate the cleared generation.
+
+For a last-known-valid manifest, give `LastKnownValidManifestStore` an app-private file URL and call `refresh(using:)` on each refresh attempt:
+
+```swift
+let manifestStore = try LastKnownValidManifestStore(fileURL: manifestFileURL)
+let refresh = try await manifestStore.refresh(using: manifest)
+let datasetManifest = refresh.manifest
+// refresh.source is .network or .lastKnownValid
+```
+
+The refresh always attempts the network and reports whether `.network` or `.lastKnownValid` supplied the result. A transport/network failure may use the previously persisted, fully validated manifest; HTTP status errors, malformed JSON, unsupported schema, and invalid metadata are surfaced and never overwrite it. Manifest persistence is separate from `CachedAddressDataSource` and its 180-day index policy. `try await manifestStore.clear()` removes only its own file and temporary files.
 
 `Range<Int>` is half-open (`start..<end`). Partial responses must be HTTP 206 with one exact `Content-Range: bytes start-end/total` matching the request and payload length. A provider should return the status and headers it received from its transport.
 

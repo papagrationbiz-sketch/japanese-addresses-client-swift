@@ -103,27 +103,13 @@ public struct AddressManifestClient: Sendable {
 
   public func fetchManifest() async throws -> AddressManifest {
     let response = try await dataSource.response(for: manifestURL, range: nil)
+    try Task.checkCancellation()
     try ResponseValidator.validate(
       data: response.data, statusCode: response.statusCode, headers: response.headers,
       requestedRange: nil)
     do {
       let manifest = try JSONDecoder().decode(AddressManifest.self, from: response.data)
-      guard manifest.schemaVersion == 1 else {
-        throw AddressManifestError.unsupportedSchemaVersion(manifest.schemaVersion)
-      }
-      guard !manifest.current.isEmpty, !manifest.versions.isEmpty else {
-        throw AddressManifestError.emptyManifest
-      }
-      guard manifest.versions[manifest.current] != nil else {
-        throw AddressManifestError.versionNotFound(manifest.current)
-      }
-      if let previous = manifest.previous, manifest.versions[previous] == nil {
-        throw AddressManifestError.versionNotFound(previous)
-      }
-      if manifest.previous == manifest.current {
-        throw AddressManifestError.malformedManifest
-      }
-      try Self.validateMetadata(manifest)
+      try Self.validate(manifest)
       return manifest
     } catch let error as AddressManifestError { throw error } catch {
       throw AddressManifestError.malformedManifest
@@ -142,20 +128,7 @@ public struct AddressManifestClient: Sendable {
     manifest: AddressManifest, origin: URL, version requestedVersion: String? = nil,
     region: String? = nil
   ) throws -> ResolvedAddressDataset {
-    guard manifest.schemaVersion == 1 else {
-      throw AddressManifestError.unsupportedSchemaVersion(manifest.schemaVersion)
-    }
-    guard !manifest.versions.isEmpty else { throw AddressManifestError.emptyManifest }
-    guard manifest.versions[manifest.current] != nil else {
-      throw AddressManifestError.versionNotFound(manifest.current)
-    }
-    if let previous = manifest.previous, manifest.versions[previous] == nil {
-      throw AddressManifestError.versionNotFound(previous)
-    }
-    guard manifest.previous != manifest.current else {
-      throw AddressManifestError.malformedManifest
-    }
-    try validateMetadata(manifest)
+    try validate(manifest)
     let id = requestedVersion ?? manifest.current
     guard let dataset = manifest.versions[id] else {
       throw AddressManifestError.versionNotFound(id)
@@ -175,6 +148,26 @@ public struct AddressManifestClient: Sendable {
     return ResolvedAddressDataset(
       version: id, baseAPIURL: try fixedBaseURL(origin: origin, prefix: dataset.prefix),
       coverage: dataset.coverage)
+  }
+
+  /// Validates a decoded manifest before it is used or persisted.
+  public static func validate(_ manifest: AddressManifest) throws {
+    guard manifest.schemaVersion == 1 else {
+      throw AddressManifestError.unsupportedSchemaVersion(manifest.schemaVersion)
+    }
+    guard !manifest.current.isEmpty, !manifest.versions.isEmpty else {
+      throw AddressManifestError.emptyManifest
+    }
+    guard manifest.versions[manifest.current] != nil else {
+      throw AddressManifestError.versionNotFound(manifest.current)
+    }
+    if let previous = manifest.previous, manifest.versions[previous] == nil {
+      throw AddressManifestError.versionNotFound(previous)
+    }
+    guard manifest.previous != manifest.current else {
+      throw AddressManifestError.malformedManifest
+    }
+    try validateMetadata(manifest)
   }
 
   private static func fixedBaseURL(origin: URL, prefix: String) throws -> URL {

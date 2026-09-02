@@ -131,6 +131,29 @@ private final class ContinuationBox<Value: Sendable>: @unchecked Sendable {
   }
 }
 
+private final class CancellationRelay<Value: Sendable>: @unchecked Sendable {
+  private let lock = NSLock()
+  private var isCancelled = false
+  private var continuation: ContinuationBox<Value>?
+
+  func install(_ continuation: ContinuationBox<Value>) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !isCancelled else { return false }
+    self.continuation = continuation
+    return true
+  }
+
+  func cancel() {
+    lock.lock()
+    isCancelled = true
+    let continuation = self.continuation
+    self.continuation = nil
+    lock.unlock()
+    continuation?.resume(throwing: CancellationError())
+  }
+}
+
 private final class ExecutorState: @unchecked Sendable {
   let ready = DispatchSemaphore(value: 0)
   var runLoop: CFRunLoop?
@@ -314,48 +337,60 @@ public final class JapaneseAddressNormalizer: @unchecked Sendable {
     }
 
     func normalize(_ input: String, level: Int?) async throws -> NormalizedAddress {
-      try await withCheckedThrowingContinuation { continuation in
-        let continuationBox = ContinuationBox<NormalizedAddress>(continuation)
-        executor.perform {
-          guard let options = self.context.value.evaluateScript("({})") else {
-            continuationBox.resume(throwing: JapaneseAddressError.scriptEvaluationFailed)
+      let cancellation = CancellationRelay<NormalizedAddress>()
+      return try await withTaskCancellationHandler {
+        try Task.checkCancellation()
+        return try await withCheckedThrowingContinuation { continuation in
+          let continuationBox = ContinuationBox<NormalizedAddress>(continuation)
+          guard cancellation.install(continuationBox) else {
+            continuationBox.resume(throwing: CancellationError())
             return
           }
-          if let level {
-            options.setObject(level, forKeyedSubscript: "level" as NSString)
-          }
-          guard
-            let normalize = self.normalize.value,
-            let promise = normalize.call(withArguments: [input, options])
-          else {
-            continuationBox.resume(throwing: JapaneseAddressError.scriptEvaluationFailed)
-            return
-          }
-          let success: @convention(block) (JSValue?) -> Void = { [executor = self.executor] value in
-            let valueBox = JavaScriptValueBox(value)
-            executor.perform {
-              do {
-                continuationBox.resume(returning: try Self.address(from: valueBox.value))
-              } catch {
-                continuationBox.resume(throwing: error)
+          executor.perform {
+            guard let options = self.context.value.evaluateScript("({})") else {
+              continuationBox.resume(throwing: JapaneseAddressError.scriptEvaluationFailed)
+              return
+            }
+            if let level {
+              options.setObject(level, forKeyedSubscript: "level" as NSString)
+            }
+            guard
+              let normalize = self.normalize.value,
+              let promise = normalize.call(withArguments: [input, options])
+            else {
+              continuationBox.resume(throwing: JapaneseAddressError.scriptEvaluationFailed)
+              return
+            }
+            let success: @convention(block) (JSValue?) -> Void = {
+              [executor = self.executor] value in
+              let valueBox = JavaScriptValueBox(value)
+              executor.perform {
+                do {
+                  continuationBox.resume(returning: try Self.address(from: valueBox.value))
+                } catch {
+                  continuationBox.resume(throwing: error)
+                }
               }
             }
-          }
-          let failure: @convention(block) (JSValue?) -> Void = { [executor = self.executor] value in
-            let valueBox = JavaScriptValueBox(value)
-            executor.perform {
-              continuationBox.resume(
-                throwing: JapaneseAddressError.dataSourceFailure(
-                  valueBox.value?.toString() ?? "unknown JavaScript error"
+            let failure: @convention(block) (JSValue?) -> Void = {
+              [executor = self.executor] value in
+              let valueBox = JavaScriptValueBox(value)
+              executor.perform {
+                continuationBox.resume(
+                  throwing: JapaneseAddressError.dataSourceFailure(
+                    valueBox.value?.toString() ?? "unknown JavaScript error"
+                  )
                 )
-              )
+              }
+            }
+            guard promise.invokeMethod("then", withArguments: [success, failure]) != nil else {
+              continuationBox.resume(throwing: JapaneseAddressError.invalidResponse)
+              return
             }
           }
-          guard promise.invokeMethod("then", withArguments: [success, failure]) != nil else {
-            continuationBox.resume(throwing: JapaneseAddressError.invalidResponse)
-            return
-          }
         }
+      } onCancel: {
+        cancellation.cancel()
       }
     }
 
