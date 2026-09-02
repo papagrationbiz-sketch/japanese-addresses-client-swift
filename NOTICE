@@ -1,0 +1,10 @@
+This package bundles and invokes the following third-party software:
+
+@geolonia/normalize-japanese-addresses 3.1.3
+Copyright 2020 Geolonia Inc.
+License: MIT
+
+The original license text is included at:
+Sources/JapaneseAddressNormalizer/Resources/normalize-japanese-addresses-LICENSE.txt
+The original UMD bundle is included at:
+Sources/JapaneseAddressNormalizer/Resources/normalize-japanese-addresses-3.1.3.cjs
