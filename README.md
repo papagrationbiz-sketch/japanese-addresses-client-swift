@@ -12,14 +12,14 @@ The address normalization algorithm is not reimplemented in Swift. JavaScriptCor
 - Configurable base API URL.
 - Synthetic fixture tests for level 0, level 3, and a byte-range request.
 - `URLSessionAddressDataSource`, which checks HTTP status and exact `Content-Range` semantics.
-- `AddressManifestClient`, which accepts schema version 1 manifests and resolves an immutable relative version prefix to `origin/<prefix>/api/ja`.
+- `AddressManifestClient`, which accepts schema version 1 manifests and resolves a registered version ID to the immutable host-root path `/versions/<version>/api/ja`. The manifest `prefix` remains validated metadata and is not trusted for URL construction.
 - `CachedAddressDataSource`, a regional/request cache that stores only URLs and ranges requested by the application. It does not prefetch or assume that unspecified manifest coverage means national coverage.
 
 Applications may also provide their own `AddressDataSource` (for example, an R2-aware implementation).
 
 ## Manifest schema
 
-The client accepts schema version 1 manifests with `schemaVersion`, `current`, `previous`, `updatedAt`, and a `versions` dictionary. Each version has a relative `prefix`, `publishedAt`, optional `sourceUpdatedAt`, and optional `coverage` (`national` or an explicit `municipalities` list). Omitted coverage is unknown; a region request then fails instead of falling back to a national dataset. Select a fixed version for reproducible requests.
+The client accepts schema version 1 manifests with `schemaVersion`, `current`, `previous`, `updatedAt`, and a `versions` dictionary. Each version has a relative `prefix` (metadata only), `publishedAt`, optional `sourceUpdatedAt`, and optional `coverage` (`national` or an explicit `municipalities` list). Omitted coverage is unknown; a region request then fails instead of falling back to a national dataset. Select a fixed version for reproducible requests. A manifest URL's path is ignored for dataset construction; the host and port are retained and the result is `/versions/<version>/api/ja`.
 
 ## Usage
 

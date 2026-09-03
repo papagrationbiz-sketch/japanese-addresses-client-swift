@@ -373,7 +373,7 @@ final class AddressInfrastructureTests: XCTestCase {
     let origin = URL(string: "https://data.example.invalid/manifest.json")!
     let resolved = try AddressManifestClient.resolve(manifest: manifest, origin: origin)
     XCTAssertEqual(
-      resolved.baseAPIURL.absoluteString, "https://data.example.invalid/v2026-01/api/ja")
+      resolved.baseAPIURL.absoluteString, "https://data.example.invalid/versions/2026-01/api/ja")
     XCTAssertThrowsError(
       try AddressManifestClient.resolve(
         manifest: manifest, origin: origin, region: "synthetic-region")
@@ -485,5 +485,49 @@ final class AddressInfrastructureTests: XCTestCase {
       versions: versions)
     let rollback = try AddressManifestClient.resolve(manifest: rolledBack, origin: origin)
     XCTAssertEqual(rollback.baseAPIURL, previous.baseAPIURL)
+  }
+
+  func testManifestURLUsesHostRootAndVersionIDNotMetadataPrefix() throws {
+    let timestamp = "2026-01-01T00:00:00.000Z"
+    let manifest = AddressManifest(
+      schemaVersion: 1,
+      current: "v1",
+      updatedAt: timestamp,
+      versions: [
+        "v1": AddressManifestVersion(
+          prefix: "internal/metadata-v1", publishedAt: timestamp)
+      ])
+    let origin = URL(string: "https://data.example.invalid/nested/distribution/manifest.json")!
+    let resolved = try AddressManifestClient.resolve(manifest: manifest, origin: origin)
+    XCTAssertEqual(
+      resolved.baseAPIURL.absoluteString, "https://data.example.invalid/versions/v1/api/ja")
+    let portOrigin = URL(
+      string: "https://data.example.invalid:8443/nested/distribution/manifest.json")!
+    let portResolved = try AddressManifestClient.resolve(manifest: manifest, origin: portOrigin)
+    XCTAssertEqual(
+      portResolved.baseAPIURL.absoluteString,
+      "https://data.example.invalid:8443/versions/v1/api/ja")
+    XCTAssertThrowsError(
+      try AddressManifestClient.resolve(
+        manifest: manifest,
+        origin: URL(string: "https://data.example.invalid/manifest.json?ignored=true")!))
+    XCTAssertThrowsError(
+      try AddressManifestClient.resolve(
+        manifest: manifest,
+        origin: URL(string: "https://data.example.invalid/manifest.json#ignored")!))
+
+    let encodedID = AddressManifest(
+      schemaVersion: 1,
+      current: "v%2F1",
+      updatedAt: timestamp,
+      versions: ["v%2F1": AddressManifestVersion(prefix: "v1", publishedAt: timestamp)])
+    XCTAssertThrowsError(try AddressManifestClient.resolve(manifest: encodedID, origin: origin))
+
+    let unsafePrefix = AddressManifest(
+      schemaVersion: 1,
+      current: "v1",
+      updatedAt: timestamp,
+      versions: ["v1": AddressManifestVersion(prefix: "v1/../secret", publishedAt: timestamp)])
+    XCTAssertThrowsError(try AddressManifestClient.resolve(manifest: unsafePrefix, origin: origin))
   }
 }

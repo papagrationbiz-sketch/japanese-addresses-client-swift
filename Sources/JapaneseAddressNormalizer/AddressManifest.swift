@@ -30,7 +30,8 @@ public struct AddressManifestCoverage: Codable, Sendable, Equatable {
   }
 }
 
-/// A fixed dataset revision. `prefix` is a relative path below the manifest's origin.
+/// A fixed dataset revision. `prefix` is retained and validated as metadata;
+/// public URLs use the registered version ID at the host root.
 public struct AddressManifestVersion: Codable, Sendable, Equatable {
   public let prefix: String
   public let publishedAt: String
@@ -146,7 +147,7 @@ public struct AddressManifestClient: Sendable {
       }
     }
     return ResolvedAddressDataset(
-      version: id, baseAPIURL: try fixedBaseURL(origin: origin, prefix: dataset.prefix),
+      version: id, baseAPIURL: try fixedBaseURL(origin: origin, versionID: id),
       coverage: dataset.coverage)
   }
 
@@ -170,26 +171,18 @@ public struct AddressManifestClient: Sendable {
     try validateMetadata(manifest)
   }
 
-  private static func fixedBaseURL(origin: URL, prefix: String) throws -> URL {
+  private static func fixedBaseURL(origin: URL, versionID: String) throws -> URL {
     guard let scheme = origin.scheme?.lowercased(), ["http", "https"].contains(scheme),
       let host = origin.host,
       origin.user == nil, origin.password == nil, origin.query == nil, origin.fragment == nil,
-      !prefix.isEmpty,
-      !prefix.hasPrefix("/"), !prefix.hasSuffix("/"), !prefix.contains("\\"), !prefix.contains("?"),
-      !prefix.contains("#")
+      safeVersionID(versionID)
     else { throw AddressManifestError.invalidVersionPrefix }
-    guard safePrefix(prefix) else {
-      throw AddressManifestError.invalidVersionPrefix
-    }
-    let components = prefix.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-    var urlComponents = URLComponents()
-    urlComponents.scheme = scheme
-    urlComponents.host = host
-    urlComponents.port = origin.port
-    guard var url = urlComponents.url else { throw AddressManifestError.invalidVersionPrefix }
-    for component in components { url.appendPathComponent(component) }
-    url.appendPathComponent("api")
-    url.appendPathComponent("ja")
+    var components = URLComponents()
+    components.scheme = scheme
+    components.host = host
+    components.port = origin.port
+    components.path = "/versions/\(versionID)/api/ja"
+    guard let url = components.url else { throw AddressManifestError.invalidVersionPrefix }
     return url
   }
 
@@ -198,9 +191,7 @@ public struct AddressManifestClient: Sendable {
       throw AddressManifestError.malformedManifest
     }
     for (id, version) in manifest.versions {
-      guard (1...128).contains(id.count), let first = id.first,
-        first.isASCII && (first.isLetter || first.isNumber),
-        id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) })
+      guard safeVersionID(id)
       else {
         throw AddressManifestError.malformedManifest
       }
@@ -253,6 +244,15 @@ public struct AddressManifestClient: Sendable {
     return prefix.split(separator: "/", omittingEmptySubsequences: false).allSatisfy {
       !$0.isEmpty && $0 != "." && $0 != ".."
         && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }
+    }
+  }
+
+  private static func safeVersionID(_ value: String) -> Bool {
+    guard (1...128).contains(value.count), let first = value.first,
+      first.isASCII && (first.isLetter || first.isNumber)
+    else { return false }
+    return value.allSatisfy {
+      $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0))
     }
   }
 
